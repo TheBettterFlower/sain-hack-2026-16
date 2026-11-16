@@ -1,5 +1,6 @@
 import os
 import httpx
+from widget_service import generate_morning_screen
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 from repository import repo
@@ -67,27 +68,18 @@ async def run_case(
         final_questions_answers.extend(answers)
 
     # Метрика W (Экраны утра - генерация виджетов)
+        # Метрика W (Экраны утра - генерация виджетов)
     for user_data in raw_users:
         user_id = user_data["profile"]["id"]
         
-        # Получаем список разрешенных виджетов из репозитория
-        active_widgets = repo.get_active_widgets(user_id)
-        user_widgets = []
-        
-        # Базовая заглушка: если виджет сна не отключен, показываем его
-        if "sleep_card" in active_widgets:
-             user_widgets.append({
-                 "id": "sleep_card",
-                 "payload": {
-                     "title": "Ваш сон", 
-                     "duration": "8ч"
-                 }
-             })
+        # Делегируем выбор виджетов сервису
+        user_widgets = generate_morning_screen(user_id)
         
         final_mornings.append({
             "user_id": user_id,
             "widgets": user_widgets
         })
+
 
     # --- 3. ФОРМИРОВАНИЕ ОТВЕТА ---
     return {

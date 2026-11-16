@@ -1,30 +1,32 @@
 import os
 import asyncio
 import json
-from openai import AsyncOpenAI # Асинхронный клиент для неблокирующей работы
+from openai import AsyncOpenAI
 from repository import repo
 
-# Инициализируем клиент ключами из переменных окружения[span_10](start_span)[span_10](end_span)
+# --- ПЕРЕКЛЮЧАТЕЛЬ ОКРУЖЕНИЯ ---
+# Защищает лимит в 300к токенов. Локально отдаем фейк, на сервере - реальную LLM.
+IS_DEV = os.getenv("ENV", "dev") == "dev"
+
 client = AsyncOpenAI(
     base_url=os.getenv("LLM_BASE_URL", "https://bifrost.be-healthy.tech/v1"),
-    api_key=os.getenv("LLM_API_KEY", "dev-key") # Локально бери из файла llm.key
+    api_key=os.getenv("LLM_API_KEY", "dev-key")
 )
 MODEL_NAME = os.getenv("LLM_MODEL", "gpt-6-luna")
 
-def build_user_context(events: list) -> str:
+def build_user_context(user_id: str, events: list) -> str:
     """
-    Сжимает сырые события в компактное текстовое досье (Data Transformation).
+    Гибридное сжатие: сон/тренировки достаем из горячего кэша (events), 
+    а агрегацию за 90 дней запрашиваем у базы через SQL.
     """
     if not events:
         return "Нет данных."
 
-    # Хэш-таблицы для агрегации (аналог map в Go)
     sleep_logs = []
     workouts = []
-    habit_counts = {}
 
+    # Оставляем Python-цикл только для хронологии последних 14 дней
     for event in events:
-        # Pydantic-объекты из нашего In-Memory репозитория
         e_type = event.type.lower()
         date = event.date
         details = event.details
@@ -35,16 +37,10 @@ def build_user_context(events: list) -> str:
         elif e_type == "workout":
             w_type = details.get("type", "активность")
             workouts.append(f"{date}: {w_type}")
-        else:
-            # Агрегируем остальные повторяющиеся события (например, питание или воду)
-            # Считаем частоту за 90 дней
-            key = f"{e_type}"
-            if "name" in details:
-                key += f" ({details['name']})"
-            habit_counts[key] = habit_counts.get(key, 0) + 1
 
-    # Собираем итоговую строку. 
-    # Ограничиваем историю сна и тренировок последними 14 днями, чтобы экономить токены.
+    # Запрашиваем готовую статистику напрямую из базы данных SQLite
+    habit_counts = repo.get_user_habit_stats(user_id)
+
     parts = []
     if sleep_logs:
         parts.append("Сон (последние 14 дней): " + "; ".join(sleep_logs[-14:]))
@@ -60,12 +56,17 @@ def build_user_context(events: list) -> str:
 async def ask_llm_in_batches(user_id: str, user_questions: list) -> list:
     """Обрабатывает вопросы пачками, чтобы не пробить лимит 30 RPM"""
     
-    # 1. Достаем события пользователя из нашей In-Memory базы
+    # --- ЗАЩИТА ТОКЕНОВ ПРИ ЛОКАЛЬНОЙ ОТЛАДКЕ ---
+    if IS_DEV:
+        print(f"DEV MODE: Возвращаем мок-ответы для юзера {user_id} (экономим токены!)")
+        await asyncio.sleep(0.5) 
+        return [{"question_id": q["id"], "answer": "A"} for q in user_questions]
+
+    # Достаем события пользователя из базы
     events = repo.get_user_events(user_id)
     
-    # Сюда нужно написать функцию, которая сожмет 90 дней сырых данных
-    # в компактное текстовое "досье", чтобы сэкономить токены.
-    context_text = build_user_context(events) 
+    # Сжимаем 90 дней истории в текст (передаем и user_id, и events)
+    context_text = build_user_context(user_id, events) 
     
     batch_size = 20
     results = []
@@ -102,20 +103,16 @@ async def ask_llm_in_batches(user_id: str, user_questions: list) -> list:
                 batch_answers = json.loads(raw_content)
                 results.extend(batch_answers.get("answers", []))
                 
-                # Если всё прошло успешно, принудительно выходим из цикла retry
-                break 
+                break # Успех - выходим из цикла retry
                 
             except Exception as e:
                 print(f"Ошибка API (попытка {attempt + 1}/{max_retries}): {e}")
                 if attempt < max_retries - 1:
-                    # Ждем 2, 4 секунды перед следующей попыткой (экспоненциальный рост)
                     wait_time = 2 ** (attempt + 1)
                     print(f"Ждем {wait_time} сек. перед повтором...")
                     await asyncio.sleep(wait_time)
                 else:
                     print("Провал после 3 попыток. Заполняем пропущенные ответы 'X'.")
-                    # Чтобы не сломать метрику ответа, в случае полного отказа API 
-                    # возвращаем безопасный вариант "X" (нет данных)
                     for q in batch:
                         results.append({"question_id": q["id"], "answer": "X"})
 
