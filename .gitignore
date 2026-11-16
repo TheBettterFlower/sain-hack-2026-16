@@ -1,0 +1,8 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Секретные файлы из архива организаторов
+api.token
+llm.key
+id_ed25519
