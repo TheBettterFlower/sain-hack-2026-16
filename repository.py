@@ -12,10 +12,9 @@ class Event(BaseModel):
 
 # --- 2. СЛОЙ ХРАНЕНИЯ (Паттерн Data Access Object через SQLite) ---
 class SQLiteRepository:
-    def __init__(self, db_path="hackathon.db"):
-        # Подключаемся к файловой БД. check_same_thread=False нужен для FastAPI.
+    def __init__(self, db_path="/tmp/hackathon.db"):
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
-        self.conn.row_factory = sqlite3.Row # Получаем строки как словари, а не индексы
+        self.conn.row_factory = sqlite3.Row
         self._init_db()
 
     def _init_db(self):
