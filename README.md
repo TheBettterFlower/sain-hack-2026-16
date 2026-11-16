@@ -29,14 +29,13 @@
 ```bash
 exec uvicorn main:app --host 0.0.0.0 --port "${PORT:-8000}"
 ```
-
 ### Локальный запуск (с Mock-данными для экономии лимита LLM)
 
 **1. Клонирование репозитория и настройка окружения**
 
 ```bash
-git clone <URL_ВАШЕГО_РЕПОЗИТОРИЯ>
-cd <ПАПКА_ПРОЕКТА>
+git clone https://github.com/TheBettterFlower/sain-hack-2026-team16.git
+cd sain-hack-2026-team16
 
 python -m venv venv
 
@@ -47,6 +46,27 @@ source venv/bin/activate
 venv\Scripts\activate
 
 pip install -r requirements.txt
+```
+
+**2. Настройка переменных окружения**
+
+```bash
+export ENV=dev
+export LLM_API_KEY=dev-key
+```
+
+**3. Запуск бэкенда**
+
+```bash
+bash start.sh
+```
+
+**4. Запуск фронтенда**
+
+```bash
+cd frontend
+npm install
+npm run dev
 ```
 
 **2. Настройка переменных окружения**
