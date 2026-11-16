@@ -1,6 +1,7 @@
 import os
 import asyncio
 import json
+from prompts import SYSTEM_PROMPT_TEMPLATE
 from openai import AsyncOpenAI
 from repository import repo
 
@@ -74,19 +75,11 @@ async def ask_llm_in_batches(user_id: str, user_questions: list) -> list:
     for i in range(0, len(user_questions), batch_size):
         batch = user_questions[i:i + batch_size]
         
-        prompt = f"""
-        Ты — аналитик данных. Проанализируй контекст пользователя и ответь на вопросы.
-        СТРОГОЕ ПРАВИЛО: Не давай медицинских советов, не используй диагнозы, названия лечения и дозировки.
-        
-        Контекст пользователя (события за 90 дней):
-        {context_text}
-        
-        Вопросы:
-        {json.dumps(batch, ensure_ascii=False)}
-        
-        Верни ответ в формате валидного JSON-массива, где каждый объект содержит:
-        "question_id" и "answer" (строго A, B, C, D или X, если ответа в контексте нет).
-        """
+        prompt = SYSTEM_PROMPT_TEMPLATE.format(
+            context=context_text,
+            questions=json.dumps(batch, ensure_ascii=False)
+        )
+
         
         # --- ПАТТЕРН RETRY С EXPONENTIAL BACKOFF ---
         max_retries = 3
