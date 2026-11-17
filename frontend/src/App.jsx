@@ -13,10 +13,7 @@ import {
   Sparkles,
   Target,
   Send,
-  Check,
   RotateCcw,
-  Plus,
-  Minus,
   Search,
   ArrowRight,
   ArrowLeft,
@@ -30,8 +27,22 @@ import './App.css';
 // Единый монохромный цвет для иконок
 const ICON_COLOR = '#f9f9f9';
 const runtimeConfig = typeof window !== 'undefined' ? window : {};
-const API_BASE = runtimeConfig.SAIN_API_URL || 'http://localhost:8000';
-const SAIN_USER_ID = runtimeConfig.SAIN_USER_ID || 'demo-user';
+const API_BASE = String(runtimeConfig.SAIN_API_URL || 'http://localhost:8000').replace(/\/+$/, '');
+const INITIAL_USER_ID = runtimeConfig.SAIN_USER_ID || '';
+
+const formatDate = (value) => {
+  if (!value) return 'Дата не указана';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+};
+
+const formatHours = (hours) => {
+  if (typeof hours !== 'number' || !Number.isFinite(hours)) return 'Нет данных';
+  const totalMinutes = Math.round(hours * 60);
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  return m ? `${h}ч ${m}м` : `${h}ч`;
+};
 
 // -------------------------------------------------------------
 // РЕЖИМЫ КОНТЕКСТА (Паттерны 90 дней — живут в окне Ассистента)
@@ -40,27 +51,18 @@ const SCENARIOS = [
   {
     id: 'flight',
     title: 'Перед перелётом',
-    badge: 'Паттерн: вечерний перелёт',
-    agentGreeting:
-      'Доброе утро! Давай начнем этот день вместе',
     // Маленькие виджеты (календарь и вода) идут парой, чтобы занять одну общую строку
     widgetIds: ['calendar_brief', 'water_tracker', 'sleep_card', 'day_plan']
   },
   {
     id: 'restart',
     title: 'После срыва привычки',
-    badge: 'Паттерн: пятничный спад',
-    agentGreeting:
-      'Конец недели сбил ритм. Никаких упрёков: восстанавливаем темп мягко и без стресса.',
     // Маленькие виджеты (восстановление и стрик) идут парой в одну строку
     widgetIds: ['recovery_tip', 'habit_streak', 'restart_card', 'workout_suggest']
   },
   {
     id: 'peak',
     title: 'Пик продуктивности',
-    badge: 'Паттерн: высокий ресурс',
-    agentGreeting:
-      'Ресурс 92%. Окно пикового фокуса: 10:00–13:00. Лучшее время для ключевых задач.',
     // Маленькие виджеты (шаги и цель) идут парой в одну строку
     widgetIds: ['steps_ring', 'goal_progress', 'energy_forecast', 'day_plan']
   }
@@ -70,37 +72,31 @@ const SCENARIOS = [
 // БЫСТРЫЕ ВОПРОСЫ К АССИСТЕНТУ (ЛАКОНИЧНЫЕ ОТВЕТЫ ИЗ ПАМЯТИ 90 ДНЕЙ)
 // -------------------------------------------------------------
 const SMART_PRESETS = [
-  {
-    q: '✈️ Сон перед перелётом',
-    a: 'Перед рейсами глубокий сон падает на 35%. Собери вещи до 18:00 и выпей 500 мл воды до посадки.'
-  },
-  {
-    q: '📉 Спад привычек к пятнице',
-    a: 'К четвергу накапливается дефицит сна (~45 мин/день). Сдвиг отбоя на 30 мин раньше в среду сохранит баланс.'
-  },
-  {
-    q: '⚡ Окно пиковой энергии',
-    a: 'Максимум фокуса — с 10:00 до 13:00. После 14:30 наступит спад: запланируй рутину или прогулку.'
-  },
-  {
-    q: '💧 Норма воды до обеда',
-    a: 'Твоя норма до 14:00 — 4 стакана (1 литр), чтобы компенсировать сухой воздух в самолёте.'
-  }
+  { q: '🌙 Что известно о моём сне?' },
+  { q: '📊 Какие закономерности есть в моей истории?' },
+  { q: '🏃 Какая активность была недавно?' },
+  { q: '🎯 Что ты знаешь о моей цели?' }
 ];
 
 export default function App() {
   const [view, setView] = useState('morning'); // 'morning' | 'chat' | 'catalog'
-  const [activeScenarioId, setActiveScenarioId] = useState('flight');
   const [activeModeId, setActiveModeId] = useState('flight');
   const [activeCategory, setActiveCategory] = useState('all');
   const [morningWidgetIds, setMorningWidgetIds] = useState(SCENARIOS[0].widgetIds);
   const [widgetConfigs, setWidgetConfigs] = useState({});
   const [savedModes, setSavedModes] = useState([]);
   const [dashboardLoaded, setDashboardLoaded] = useState(false);
+  const [users, setUsers] = useState([]);
+  const [userRefreshKey, setUserRefreshKey] = useState(0);
+  const [selectedUserId, setSelectedUserId] = useState('');
+  const [userSummary, setUserSummary] = useState(null);
+  const [apiStatus, setApiStatus] = useState('connecting');
+  const [apiError, setApiError] = useState('');
+  const [isLoadingSummary, setIsLoadingSummary] = useState(false);
+  const [currentTime, setCurrentTime] = useState(() => new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }));
   const [isEditingDashboard, setIsEditingDashboard] = useState(false);
   const [selectedWidgetId, setSelectedWidgetId] = useState(null);
   const [isSending, setIsSending] = useState(false);
-  const [customGreeting, setCustomGreeting] = useState('');
   const allWidgetIds = [
     'sleep_card', 'calendar_brief', 'restart_card', 'workout_suggest',
     'steps_ring', 'water_tracker', 'day_plan', 'habit_streak',
@@ -109,14 +105,6 @@ export default function App() {
 
   // Интерактивные данные
   const [quickInput, setQuickInput] = useState('');
-  const [waterCups, setWaterCups] = useState(2);
-  const [planTasks, setPlanTasks] = useState([
-    { id: 1, text: 'Прогулка 20 мин на утреннем солнце', done: true },
-    { id: 2, text: 'Глубокий фокус-блок 10:00 – 12:30', done: false },
-    { id: 3, text: 'Собрать ручную кладь до 18:00', done: false }
-  ]);
-  const [isBreathing, setIsBreathing] = useState(false);
-  const [breathPhase, setBreathPhase] = useState('Вдох 4 сек');
 
   // Чат с ассистентом
   const [messages, setMessages] = useState([
@@ -127,50 +115,143 @@ export default function App() {
   ]);
   const [chatInput, setChatInput] = useState('');
 
-  const currentScenario = useMemo(
-    () => SCENARIOS.find((s) => s.id === activeScenarioId) || SCENARIOS[0],
-    [activeScenarioId]
-  );
-
-  // Загружаем экран и пользовательские режимы из SQLite.
+  // Связываемся с backend и загружаем список пользователей, появившихся через /run.
   useEffect(() => {
     let cancelled = false;
-    fetch(`${API_BASE}/api/sain/state/${encodeURIComponent(SAIN_USER_ID)}`)
-      .then((response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return response.json();
-      })
-      .then((data) => {
+    const loadUsers = async () => {
+      try {
+        const healthResponse = await fetch(`${API_BASE}/health`);
+        if (!healthResponse.ok) throw new Error(`Backend health: HTTP ${healthResponse.status}`);
+        const usersResponse = await fetch(`${API_BASE}/api/sain/users`);
+        if (!usersResponse.ok) throw new Error(`Users API: HTTP ${usersResponse.status}`);
+        const data = await usersResponse.json();
+        const loadedUsers = Array.isArray(data.users) ? data.users : [];
         if (cancelled) return;
-        if (Array.isArray(data.widget_ids)) setMorningWidgetIds(data.widget_ids);
-        if (data.widget_configs && typeof data.widget_configs === 'object') {
-          setWidgetConfigs(data.widget_configs);
+        setUsers(loadedUsers);
+        setApiStatus('connected');
+        const preferred = loadedUsers.find((user) =>
+          user.user_id === INITIAL_USER_ID || user.external_id === INITIAL_USER_ID
+        );
+        setSelectedUserId(preferred?.user_id || loadedUsers[0]?.user_id || '');
+        if (!loadedUsers.length) {
+          setApiError('Backend подключён, но пользователей пока нет. Данные появятся после получения набора от организаторов через /run.');
+          setDashboardLoaded(true);
         }
-        if (Array.isArray(data.modes)) setSavedModes(data.modes);
-        if (data.active_mode_id) {
-          setActiveModeId(data.active_mode_id);
-          const scenario = SCENARIOS.find((item) => item.id === data.active_mode_id);
-          if (scenario) setActiveScenarioId(scenario.id);
-          else setCustomGreeting('Пользовательский режим активирован. Настроим утро под твои задачи.');
-        }
-      })
-      .catch((error) => {
-        console.warn('Не удалось загрузить настройки SAIN; используется локальный экран.', error);
-      })
-      .finally(() => {
-        if (!cancelled) setDashboardLoaded(true);
-      });
+      } catch (error) {
+        if (cancelled) return;
+        console.error('Не удалось подключиться к backend SAIN:', error);
+        setApiStatus('offline');
+        setApiError('Не удалось подключиться к backend. Проверь, что сервер запущен и доступен по адресу API.');
+        setDashboardLoaded(true);
+      }
+    };
+    loadUsers();
     return () => { cancelled = true; };
   }, []);
 
+  // Для выбранного пользователя загружаем сохранённый экран и фактические метрики.
+  useEffect(() => {
+    if (!selectedUserId) return undefined;
+    let cancelled = false;
+    setDashboardLoaded(false);
+    setIsLoadingSummary(true);
+    setApiError('');
+    setUserSummary(null);
+
+    const loadSelectedUser = async () => {
+      try {
+        const [stateResponse, summaryResponse] = await Promise.all([
+          fetch(`${API_BASE}/api/sain/state/${encodeURIComponent(selectedUserId)}`),
+          fetch(`${API_BASE}/api/sain/users/${encodeURIComponent(selectedUserId)}/summary`)
+        ]);
+        if (!stateResponse.ok) throw new Error(`State API: HTTP ${stateResponse.status}`);
+        if (!summaryResponse.ok) throw new Error(`Summary API: HTTP ${summaryResponse.status}`);
+        const [stateData, summaryData] = await Promise.all([
+          stateResponse.json(), summaryResponse.json()
+        ]);
+        if (cancelled) return;
+        setMorningWidgetIds(Array.isArray(stateData.widget_ids) ? stateData.widget_ids : []);
+        setWidgetConfigs(stateData.widget_configs && typeof stateData.widget_configs === 'object' ? stateData.widget_configs : {});
+        setSavedModes(Array.isArray(stateData.modes) ? stateData.modes : []);
+        setActiveModeId(stateData.active_mode_id || '');
+        setUserSummary(summaryData);
+      } catch (error) {
+        if (!cancelled) {
+          console.error('Не удалось загрузить данные выбранного пользователя:', error);
+          setApiError('Не удалось загрузить профиль и историю выбранного пользователя.');
+        }
+      } finally {
+        if (!cancelled) {
+          setDashboardLoaded(true);
+          setIsLoadingSummary(false);
+        }
+      }
+    };
+    loadSelectedUser();
+    return () => { cancelled = true; };
+  }, [selectedUserId, userRefreshKey]);
+
+  // Обновляем часы в шапке без фиксированного демонстрационного времени.
+  useEffect(() => {
+    const updateTime = () => setCurrentTime(new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }));
+    updateTime();
+    const intervalId = window.setInterval(updateTime, 60_000);
+    return () => window.clearInterval(intervalId);
+  }, []);
+
+  const handleUserChange = (event) => {
+    const nextUserId = event.target.value;
+    if (nextUserId === selectedUserId) return;
+    setMessages([{ sender: 'agent', text: 'Я SAIN. Теперь работаю с данными выбранного пользователя.' }]);
+    setSelectedUserId(nextUserId);
+  };
+
+  const refreshUsers = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/sain/users`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      const loadedUsers = Array.isArray(data.users) ? data.users : [];
+      setUsers(loadedUsers);
+      setApiStatus('connected');
+      setApiError(loadedUsers.length ? '' : 'В backend пока нет пользователей. Сначала организаторы должны передать данные через /run.');
+      if (!loadedUsers.some((user) => user.user_id === selectedUserId)) {
+        setSelectedUserId(loadedUsers[0]?.user_id || '');
+      }
+      setUserRefreshKey((value) => value + 1);
+    } catch (error) {
+      console.error('Не удалось обновить список пользователей:', error);
+      setApiStatus('offline');
+      setApiError('Не удалось обновить список пользователей. Проверь backend.');
+    }
+  };
+
+  const metrics = userSummary?.metrics || {};
+  const eventCounts = metrics.event_counts_90d || {};
+  const habitStats = metrics.habit_stats_90d || {};
+  const calendarCount = Object.entries(eventCounts)
+    .filter(([type]) => ['calendar', 'meeting', 'appointment', 'schedule'].includes(type.toLowerCase()))
+    .reduce((sum, [, count]) => sum + Number(count || 0), 0);
+  const waterCount = Object.entries(eventCounts)
+    .filter(([type]) => ['water', 'water_intake', 'hydration', 'drink'].includes(type.toLowerCase()))
+    .reduce((sum, [, count]) => sum + Number(count || 0), 0);
+  const topHabit = Object.entries(habitStats).sort((a, b) => Number(b[1]) - Number(a[1]))[0];
+  const assistantBriefing = !selectedUserId
+    ? 'Пока нет загруженных пользователей. После передачи данных организаторами SAIN сможет показать персональную историю.'
+    : isLoadingSummary
+      ? 'Загружаю профиль и историю пользователя из памяти SAIN…'
+      : metrics.total_events_90d
+        ? `За последние 90 дней в памяти ${metrics.total_events_90d} событий. За последние 14 дней — ${metrics.total_events_14d || 0}. Рекомендации будут основаны на этих данных.`
+        : 'История пользователя пока пуста. Я не буду придумывать показатели и смогу персонализировать рекомендации, когда появятся события.';
+
   const persistDashboard = async (widgetIds, configs = widgetConfigs, modeId = activeModeId) => {
-    if (!dashboardLoaded) return;
+    if (!dashboardLoaded || !selectedUserId) return;
     try {
       const response = await fetch(`${API_BASE}/api/sain/dashboard`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          user_id: SAIN_USER_ID,
+          user_id: selectedUserId,
           widget_ids: widgetIds,
           widget_configs: configs,
           active_mode_id: modeId
@@ -179,8 +260,10 @@ export default function App() {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
       if (Array.isArray(data.modes)) setSavedModes(data.modes);
+      setApiError('');
     } catch (error) {
       console.error('Не удалось сохранить экран SAIN:', error);
+      setApiError('Изменения экрана не сохранены на сервере. Проверь соединение и повтори действие.');
     }
   };
 
@@ -195,8 +278,6 @@ export default function App() {
   const handleScenarioChange = (id) => {
     const scenario = SCENARIOS.find((item) => item.id === id);
     if (!scenario) return;
-    setActiveScenarioId(id);
-    setCustomGreeting('');
     applyDashboard(scenario.widgetIds, widgetConfigs, id);
   };
 
@@ -231,20 +312,16 @@ export default function App() {
     setActiveModeId(mode.id);
     setWidgetConfigs(mode.widget_configs || {});
     setMorningWidgetIds(mode.widget_ids || []);
-    const scenario = SCENARIOS.find((item) => item.id === mode.id);
-    if (scenario) {
-      setActiveScenarioId(scenario.id);
-      setCustomGreeting('');
-    } else {
-      setActiveScenarioId('custom');
-      setCustomGreeting(`Режим «${mode.name}» включён. Экран настроен под выбранный сценарий.`);
-    }
     persistDashboard(mode.widget_ids || [], mode.widget_configs || {}, mode.id);
   };
 
   const sendSainMessage = async (message) => {
     const cleanMessage = message.trim();
     if (!cleanMessage || isSending) return;
+    if (!selectedUserId) {
+      setMessages((prev) => [...prev, { sender: 'agent', text: 'Сначала дождись загрузки данных пользователя из backend.' }]);
+      return;
+    }
     const pendingId = `pending-${Date.now()}`;
     setIsSending(true);
     setMessages((prev) => [
@@ -257,7 +334,7 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          user_id: SAIN_USER_ID,
+          user_id: selectedUserId,
           message: cleanMessage,
           history: messages
             .filter((item) => !item.pending && typeof item.text === 'string')
@@ -268,7 +345,10 @@ export default function App() {
             }))
         })
       });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.detail || `HTTP ${response.status}`);
+      }
       const data = await response.json();
       setMessages((prev) => prev.map((item) =>
         item.id === pendingId ? { sender: 'agent', text: data.reply || 'Готово.' } : item
@@ -279,15 +359,6 @@ export default function App() {
         if (dashboard.widget_configs) setWidgetConfigs(dashboard.widget_configs);
         if (dashboard.active_mode_id) {
           setActiveModeId(dashboard.active_mode_id);
-          const scenario = SCENARIOS.find((item) => item.id === dashboard.active_mode_id);
-          if (scenario) {
-            setActiveScenarioId(scenario.id);
-            setCustomGreeting('');
-          } else {
-            const mode = (dashboard.modes || []).find((item) => item.id === dashboard.active_mode_id);
-            setActiveScenarioId('custom');
-            if (mode) setCustomGreeting(`Режим «${mode.name}» включён.`);
-          }
         }
         if (Array.isArray(dashboard.modes)) setSavedModes(dashboard.modes);
       }
@@ -295,7 +366,7 @@ export default function App() {
       console.error('Ошибка чата SAIN:', error);
       setMessages((prev) => prev.map((item) =>
         item.id === pendingId
-          ? { sender: 'agent', text: 'Не удалось подключиться к SAIN API. Проверь, что backend запущен и доступен по адресу API.' }
+          ? { sender: 'agent', text: `Не удалось выполнить запрос: ${error.message || 'ошибка backend'}. Проверь соединение и настройки модели.` }
           : item
       ));
     } finally {
@@ -326,12 +397,6 @@ export default function App() {
     sendSainMessage(preset.q);
   };
 
-  const toggleTask = (id) => {
-    setPlanTasks((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, done: !t.done } : t))
-    );
-  };
-
   // Каталог 12 виджетов со стабильным размером текста и Liquid Glass иконками (стиль Apple / iOS)
   const allWidgets = useMemo(() => [
     {
@@ -340,28 +405,21 @@ export default function App() {
       size: 'full',
       icon: <Moon size={17} strokeWidth={2.2} className="liquid-icon icon-sleep" />,
       tag: 'Сон',
-      render: () => (
-        <div className="card-body">
-          <div className="row-between">
-            <div>
-              <div className="val-large">7ч 45м</div>
-              <div className="sub-text">в кровати 8ч 15м</div>
-            </div>
-            {/* Плашка сна отлично: приятно салатовая */}
-            <span className="pill pill-good">88 • Отлично</span>
+      render: () => {
+        const sleep = metrics.latest_sleep;
+        return (
+          <div className="card-body">
+            {sleep ? (
+              <>
+                <div className="val-large">{formatHours(Number(sleep.duration))}</div>
+                <div className="sub-text">Последняя запись: {formatDate(sleep.date)}</div>
+              </>
+            ) : (
+              <div className="sub-text">Нет записей о сне за последние 14 дней.</div>
+            )}
           </div>
-          <div className="hypnogram">
-            <div className="h-bar deep" style={{ width: '25%' }} />
-            <div className="h-bar rem" style={{ width: '22%' }} />
-            <div className="h-bar light" style={{ width: '53%' }} />
-          </div>
-          <div className="row-between sub-text" style={{ fontSize: '11px' }}>
-            <span>Глубокий: 1ч 55м (25%)</span>
-            <span>REM: 1ч 40м</span>
-            <span>Лёгкий: 4ч 10м</span>
-          </div>
-        </div>
-      )
+        );
+      }
     },
     {
       id: 'calendar_brief',
@@ -371,12 +429,9 @@ export default function App() {
       tag: 'Календарь',
       render: () => (
         <div className="card-body">
-          <div className="row-between">
-            <div className="val-accent">В 11:00</div>
-            <span className="pill pill-azure">Через 2ч</span>
-          </div>
-          <div className="val-title">Синхрон команды</div>
-          <div className="sub-text">Окно тишины до 10:45</div>
+          <div className="val-large">{calendarCount}</div>
+          <div className="val-title">Записей календаря</div>
+          <div className="sub-text">За последние 90 дней в полученных данных.</div>
         </div>
       )
     },
@@ -388,17 +443,9 @@ export default function App() {
       tag: 'Поддержка',
       render: () => (
         <div className="card-body">
-          <div className="row-between">
-            <div className="val-title">Новый день — чистый старт</div>
-            <span className="pill pill-azure">Мягкий темп</span>
-          </div>
-          <div className="sub-text">
-            Срыв привычки — естественная часть процесса. Начнём сегодня этот день в лёгком темпе.
-          </div>
-          <button className="btn-liquid-glass">
-            <RotateCcw size={14} color="#fbfcfd" />
-            <span>Продолжить в спокойном ритме</span>
-          </button>
+          <div className="val-large">{metrics.failed_habits_14d || 0}</div>
+          <div className="val-title">Отметок о пропуске привычки</div>
+          <div className="sub-text">По событиям за последние 14 дней. Это не оценка пользователя.</div>
         </div>
       )
     },
@@ -410,16 +457,9 @@ export default function App() {
       tag: 'Активность',
       render: () => (
         <div className="card-body">
-          <div className="row-between">
-            <div>
-              <div className="val-large">20 мин</div>
-              <div className="sub-text">Мягкая мобильность и стретчинг</div>
-            </div>
-            <span className="pill pill-azure">Восстановление</span>
-          </div>
-          <div className="sub-text" style={{ marginTop: '4px' }}>
-            Перед вечерним рейсом тяжёлые нагрузки не рекомендуются.
-          </div>
+          <div className="val-large">{metrics.workout_count_14d || 0}</div>
+          <div className="val-title">Записей о тренировках</div>
+          <div className="sub-text">За последние 14 дней. SAIN не предполагает нагрузку без данных.</div>
         </div>
       )
     },
@@ -429,20 +469,24 @@ export default function App() {
       size: 'half',
       icon: <Footprints size={17} strokeWidth={2.2} className="liquid-icon icon-steps" />,
       tag: 'Шаги',
-      render: () => (
-        <div className="card-body">
-          <div className="steps-progress-box">
-            <div className="steps-numbers">
-              <span className="val-large">8 400</span>
-              <span className="pill pill-good">84%</span>
-            </div>
-            <div className="progress-bar">
-              <div className="progress-fill primary" style={{ width: '84%' }} />
-            </div>
-            <div className="sub-text">из 10 000 шагов</div>
+      render: () => {
+        const steps = metrics.latest_steps;
+        const percent = steps?.target > 0 ? Math.min(100, Math.round((steps.current / steps.target) * 100)) : null;
+        return (
+          <div className="card-body">
+            {steps ? (
+              <div className="steps-progress-box">
+                <div className="steps-numbers">
+                  <span className="val-large">{Number(steps.current).toLocaleString('ru-RU')}</span>
+                  {percent !== null && <span className="pill pill-good">{percent}%</span>}
+                </div>
+                {percent !== null && <div className="progress-bar"><div className="progress-fill primary" style={{ width: `${percent}%` }} /></div>}
+                <div className="sub-text">{steps.target ? `из ${Number(steps.target).toLocaleString('ru-RU')} шагов` : `Последняя запись: ${formatDate(steps.date)}`}</div>
+              </div>
+            ) : <div className="sub-text">Данные о количестве шагов не поступали.</div>}
           </div>
-        </div>
-      )
+        );
+      }
     },
     {
       id: 'water_tracker',
@@ -450,42 +494,13 @@ export default function App() {
       size: 'half',
       icon: <Droplets size={17} strokeWidth={2.2} className="liquid-icon icon-water" />,
       tag: 'Вода',
-      render: () => {
-        const isTargetReached = waterCups >= 8;
-        return (
-          <div className="card-body">
-            <div className="row-between">
-              <span className="val-large">{waterCups * 250} мл</span>
-              {/* Чистый градиентный текст без плашки/объекта сзади */}
-              <span className={`pill ${isTargetReached ? 'pill-good' : 'pill-azure'}`}>
-                {waterCups}/8 ст.
-              </span>
-            </div>
-            <div className="water-controls">
-              <button
-                className="btn-counter"
-                onClick={() => setWaterCups((c) => Math.max(0, c - 1))}
-                disabled={waterCups === 0}
-              >
-                <Minus size={14} color="#fbfcfd" />
-              </button>
-              <div className="water-level-track">
-                <div
-                  className={`water-level-fill ${isTargetReached ? 'complete' : ''}`}
-                  style={{ width: `${(waterCups / 8) * 100}%` }}
-                />
-              </div>
-              <button
-                className="btn-counter"
-                onClick={() => setWaterCups((c) => Math.min(8, c + 1))}
-                disabled={waterCups === 8}
-              >
-                <Plus size={14} color="#fbfcfd" />
-              </button>
-            </div>
-          </div>
-        );
-      }
+      render: () => (
+        <div className="card-body">
+          <div className="val-large">{waterCount}</div>
+          <div className="val-title">Записей о воде</div>
+          <div className="sub-text">За последние 90 дней. Объём не показывается, если он не указан в источнике.</div>
+        </div>
+      )
     },
     {
       id: 'day_plan',
@@ -493,35 +508,12 @@ export default function App() {
       size: 'full',
       icon: <ClipboardList size={17} strokeWidth={2.2} className="liquid-icon icon-plan" />,
       tag: 'План дня',
-      render: () => {
-        const completedCount = planTasks.filter((t) => t.done).length;
-        const allDone = completedCount === planTasks.length;
-        return (
-          <div className="card-body">
-            <div className="row-between" style={{ marginBottom: '4px' }}>
-              <span className="val-title">Фокус дня</span>
-              {/* Компактный индикатор 1/3 или 3/3, без громоздкого текста */}
-              <span className={`pill ${allDone ? 'pill-good' : 'pill-azure'}`}>
-                {completedCount}/{planTasks.length}
-              </span>
-            </div>
-            <div className="task-list">
-              {planTasks.map((t) => (
-                <div
-                  key={t.id}
-                  className={`task-row ${t.done ? 'is-done' : ''}`}
-                  onClick={() => toggleTask(t.id)}
-                >
-                  <div className="checkbox-box">
-                    {t.done && <Check size={12} strokeWidth={3} color="#111215" />}
-                  </div>
-                  <span className="task-label">{t.text}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        );
-      }
+      render: () => (
+        <div className="card-body">
+          <div className="val-title">{userSummary?.profile?.goal || 'Цель пока не указана'}</div>
+          <div className="sub-text">Событий в истории за 14 дней: {metrics.total_events_14d || 0}. План задач можно сформировать в диалоге с SAIN.</div>
+        </div>
+      )
     },
     {
       id: 'habit_streak',
@@ -531,18 +523,13 @@ export default function App() {
       tag: 'Серия',
       render: () => (
         <div className="card-body">
-          <div className="row-between">
-            <span className="val-large">5 дней</span>
-            <span className="pill pill-good">Активна</span>
-          </div>
-          <div className="week-grid">
-            {['П', 'В', 'С', 'Ч', 'П', 'С', 'В'].map((d, i) => (
-              <div key={i} className="week-col">
-                <span className={`w-dot ${i < 5 ? 'active' : ''}`} />
-                <span className="w-label">{d}</span>
-              </div>
-            ))}
-          </div>
+          {topHabit ? (
+            <>
+              <div className="val-large">{topHabit[1]}</div>
+              <div className="val-title">Записей: {topHabit[0]}</div>
+              <div className="sub-text">Частота событий за 90 дней. Непрерывная серия не вычисляется без календарной истории.</div>
+            </>
+          ) : <div className="sub-text">Пока недостаточно событий для анализа привычек.</div>}
         </div>
       )
     },
@@ -554,20 +541,8 @@ export default function App() {
       tag: 'Дыхание',
       render: () => (
         <div className="card-body">
-          <div className="row-between">
-            <div className="val-title">{isBreathing ? breathPhase : 'Пауза 4-7-8'}</div>
-            <span className="pill pill-azure">2 мин</span>
-          </div>
-          <div className="sub-text">Для баланса нервной системы</div>
-          <button
-            className={`btn-liquid-glass sm ${isBreathing ? 'active' : ''}`}
-            onClick={() => {
-              setIsBreathing(!isBreathing);
-              if (!isBreathing) setBreathPhase('Вдох 4 сек');
-            }}
-          >
-            {isBreathing ? 'Остановить' : 'Начать упражнение'}
-          </button>
+          <div className="val-title">Короткая пауза</div>
+          <div className="sub-text">Можно ненадолго отвлечься от экрана и вернуться к делам в удобном темпе.</div>
         </div>
       )
     },
@@ -579,19 +554,8 @@ export default function App() {
       tag: 'Циркадный ритм',
       render: () => (
         <div className="card-body">
-          <div className="row-between">
-            <div>
-              <div className="val-large">10:00 – 13:00</div>
-              <div className="sub-text">Окно максимальной концентрации</div>
-            </div>
-            <span className="pill pill-good">Ресурс 94%</span>
-          </div>
-          <div className="timeline-bar">
-            <div className="t-segment" style={{ flex: 2 }}>08:00</div>
-            <div className="t-segment peak" style={{ flex: 3 }}>10:00–13:00 (Пик)</div>
-            <div className="t-segment" style={{ flex: 3 }}>14:00 (Спад)</div>
-            <div className="t-segment" style={{ flex: 2 }}>22:00</div>
-          </div>
+          <div className="val-title">Прогноз пока недоступен</div>
+          <div className="sub-text">В поступившей истории недостаточно данных, чтобы достоверно оценить личное окно энергии.</div>
         </div>
       )
     },
@@ -603,12 +567,9 @@ export default function App() {
       tag: 'Вечер',
       render: () => (
         <div className="card-body">
-          <div className="row-between">
-            <div className="val-accent">21:30</div>
-            <span className="pill pill-azure">Ритуал</span>
-          </div>
-          <div className="val-title">Отдых от экранов</div>
-          <div className="sub-text">За 60 мин до сна</div>
+          <div className="val-large">{metrics.total_events_90d || 0}</div>
+          <div className="val-title">Событий в памяти</div>
+          <div className="sub-text">Последние 90 дней. Ритуалы не назначаются автоматически.</div>
         </div>
       )
     },
@@ -620,20 +581,15 @@ export default function App() {
       tag: 'Цель месяца',
       render: () => (
         <div className="card-body">
-          <div className="row-between">
-            <span className="val-large">78%</span>
-            <span className="pill pill-good">+4 дня</span>
-          </div>
-          <div className="progress-bar">
-            <div className="progress-fill primary" style={{ width: '78%' }} />
-          </div>
-          <div className="sub-text">Режим сна и активности</div>
+          <div className="val-title">{userSummary?.profile?.goal || 'Цель не указана в профиле'}</div>
+          <div className="sub-text">SAIN отслеживает только те показатели, которые действительно присутствуют в данных.</div>
         </div>
       )
     }
-  ], [waterCups, planTasks, isBreathing, breathPhase]);
+  ], [userSummary, metrics, eventCounts, habitStats, calendarCount, waterCount, topHabit]);
 
   const morningWidgets = useMemo(() => {
+    if (!selectedUserId) return [];
     return morningWidgetIds
       .map((id) => allWidgets.find((widget) => widget.id === id))
       .filter(Boolean)
@@ -642,7 +598,7 @@ export default function App() {
         size: widgetConfigs[widget.id]?.size || widget.size,
         tag: widgetConfigs[widget.id]?.title || widget.tag
       }));
-  }, [morningWidgetIds, allWidgets, widgetConfigs]);
+  }, [selectedUserId, morningWidgetIds, allWidgets, widgetConfigs]);
 
   const filteredCatalog = useMemo(() => {
     const widgets = allWidgets.map((widget) => ({
@@ -673,7 +629,31 @@ export default function App() {
           <div className="header-left">
             <span className="app-logo">SAIN</span>
           </div>
-          <span className="time-badge-header">09:00</span>
+          <div className="header-right">
+            {users.length > 0 ? (
+              <select
+                className="header-user-select"
+                value={selectedUserId}
+                onChange={handleUserChange}
+                aria-label="Выбрать пользователя"
+                title="Пользователь, чью историю использует SAIN"
+              >
+                {users.map((user) => (
+                  <option key={user.user_id} value={user.user_id}>
+                    {user.label} · {user.external_id}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <span className={`backend-status ${apiStatus === 'connected' ? 'is-online' : ''}`}>
+                {apiStatus === 'connected' ? 'Нет пользователей' : apiStatus === 'connecting' ? 'Подключение…' : 'Backend недоступен'}
+              </span>
+            )}
+            <button className="header-refresh-button" type="button" onClick={refreshUsers} aria-label="Обновить пользователей" title="Обновить список пользователей и историю">
+              <RotateCcw size={13} />
+            </button>
+            <span className="time-badge-header">{currentTime}</span>
+          </div>
         </header>
 
         {/* ------------------------------------------------------------- */}
@@ -691,18 +671,23 @@ export default function App() {
               </div>
 
               {/* ТЕКСТ БРИФИНГА СВЕРХУ */}
-              <p className="assistant-text">{activeScenarioId === 'custom' ? customGreeting : currentScenario.agentGreeting}</p>
+              <p className="assistant-text">{assistantBriefing}</p>
+              {selectedUserId && userSummary?.profile?.goal ? (
+                <p className="assistant-user-goal">Цель: {String(userSummary.profile.goal)}</p>
+              ) : null}
+              {apiError && <div className="backend-error-banner" role="status">{apiError}</div>}
 
               {/* СТРОКА ВВОДА ВНИЗУ КАРТОЧКИ */}
               <form className="assistant-search-bar" onSubmit={handleQuickSubmit}>
                 <Search size={15} color="#ffffff" />
                 <input
                   type="text"
-                  placeholder="Спроси о сне, перелёте или планах..."
+                  placeholder={selectedUserId ? 'Спроси SAIN о своей истории...' : 'Ожидание данных пользователей...'}
                   value={quickInput}
+                  disabled={!selectedUserId || isSending}
                   onChange={(e) => setQuickInput(e.target.value)}
                 />
-                <button type="submit" className="btn-search-arrow" aria-label="Спросить">
+                <button type="submit" className="btn-search-arrow" aria-label="Спросить" disabled={!selectedUserId || isSending}>
                   <ArrowRight size={14} color="#ffffff" />
                 </button>
               </form>
@@ -715,7 +700,7 @@ export default function App() {
                 <span className="sub-text">Собрано под контекст дня</span>
               </div>
               <div className="dashboard-header-actions">
-                <button className="btn-edit-dashboard" onClick={() => setIsEditingDashboard((value) => !value)}>
+                <button className="btn-edit-dashboard" disabled={!selectedUserId} onClick={() => setIsEditingDashboard((value) => !value)}>
                   {isEditingDashboard ? 'Готово' : 'Настроить'}
                 </button>
                 <button className="btn-catalog-pill" onClick={() => setView('catalog')}>
@@ -848,8 +833,9 @@ export default function App() {
             <form className="chat-form-row" onSubmit={handleChatSend}>
               <input
                 type="text"
-                placeholder="Спроси о сне, перелёте или привычках..."
+                placeholder={selectedUserId ? 'Спроси SAIN о своей истории...' : 'Сначала загрузите данные пользователя'}
                 value={chatInput}
+                disabled={!selectedUserId || isSending}
                 onChange={(e) => setChatInput(e.target.value)}
                 autoFocus
               />
@@ -916,6 +902,7 @@ export default function App() {
                     <button
                       type="button"
                       className={`catalog-widget-action ${isOnDashboard ? 'is-added' : ''}`}
+                      disabled={!selectedUserId}
                       onClick={() => isOnDashboard ? removeWidget(w.id) : addWidget(w.id)}
                     >
                       {isOnDashboard ? 'Убрать с экрана' : 'Добавить на экран'}
@@ -950,6 +937,7 @@ export default function App() {
                 <button
                   type="button"
                   className="widget-modal-secondary"
+                  disabled={!selectedUserId}
                   onClick={() => updateWidgetSize(selectedWidget.id)}
                 >
                   {widgetConfigs[selectedWidget.id]?.size === 'full' || (!widgetConfigs[selectedWidget.id]?.size && selectedWidget.size === 'full')
@@ -957,11 +945,11 @@ export default function App() {
                     : 'Растянуть на всю ширину'}
                 </button>
                 {morningWidgetIds.includes(selectedWidget.id) ? (
-                  <button type="button" className="widget-modal-primary" onClick={() => removeWidget(selectedWidget.id)}>
+                  <button type="button" className="widget-modal-primary" disabled={!selectedUserId} onClick={() => removeWidget(selectedWidget.id)}>
                     Убрать с экрана
                   </button>
                 ) : (
-                  <button type="button" className="widget-modal-primary" onClick={() => addWidget(selectedWidget.id)}>
+                  <button type="button" className="widget-modal-primary" disabled={!selectedUserId} onClick={() => addWidget(selectedWidget.id)}>
                     Добавить на экран
                   </button>
                 )}
