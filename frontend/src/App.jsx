@@ -226,7 +226,7 @@ export default function App() {
             <span className="pill pill-azure">Мягкий темп</span>
           </div>
           <div className="sub-text">
-            Срыв привычки — естественная часть процесса. Начнём сегодня без чувства вины и в лёгком темпе.
+            Срыв привычки — естественная часть процесса. Начнём сегодня этот день в лёгком темпе.
           </div>
           <button className="btn-liquid-glass">
             <RotateCcw size={14} color="#fbfcfd" />
@@ -291,7 +291,7 @@ export default function App() {
               <span className="val-large">{waterCups * 250} мл</span>
               {/* Чистый градиентный текст без плашки/объекта сзади */}
               <span className={`pill ${isTargetReached ? 'pill-good' : 'pill-azure'}`}>
-                {waterCups}/8 стаканов
+                {waterCups}/8 ст.
               </span>
             </div>
             <div className="water-controls">
@@ -440,7 +440,7 @@ export default function App() {
             <div className="val-accent">21:30</div>
             <span className="pill pill-azure">Ритуал</span>
           </div>
-          <div className="val-title">Отказ от экранов</div>
+          <div className="val-title">Отдых от экранов</div>
           <div className="sub-text">За 60 мин до сна</div>
         </div>
       )
@@ -498,7 +498,7 @@ export default function App() {
               <div className="assistant-card-top">
                 <div className="assistant-brand">
                   <span className="dot-online" />
-                  <span className="assistant-name">Ассистент</span>
+                  <span className="assistant-name">SAIN-помощник</span>
                 </div>
               </div>
 
@@ -528,11 +528,11 @@ export default function App() {
             {/* СЕКЦИЯ КАРТОЧЕК С КНОПКОЙ КАТАЛОГА РЯДОМ */}
             <div className="section-header-row">
               <div>
-                <h3 className="section-title">Карточки на сегодня ({morningWidgets.length})</h3>
+                <h3 className="section-title">Карточки на сегодня</h3>
                 <span className="sub-text">Собрано под контекст дня</span>
               </div>
               <button className="btn-catalog-pill" onClick={() => setView('catalog')}>
-                <span>Весь каталог (12)</span>
+                <span>Весь каталог</span>
                 <ArrowRight size={13} color="#f9f9f9" />
               </button>
             </div>
@@ -565,7 +565,7 @@ export default function App() {
               </button>
               <div className="assistant-title-badge">
                 <span className="dot-online" />
-                <span>Ассистент</span>
+                <span>SAIN-помощник</span>
               </div>
             </div>
 
@@ -646,7 +646,6 @@ export default function App() {
                 <ArrowLeft size={16} color="#f9f9f9" />
                 <span>Назад к утру</span>
               </button>
-              <span className="pill pill-glass">Каталог A2UI (12)</span>
             </div>
 
             <div className="category-tabs">
